@@ -2,67 +2,27 @@
 import re, os
 from subprocess import check_output as shell
 
-# analyse_file = 'fr.analyse.bin'
-# gen_file = 'fr.gen.bin'
-# input_word = cgi.FieldStorage().getvalue("word")
-
-
-# p = Popen(['lt-proc', analyse_file], stdin=PIPE, stdout=PIPE, universal_newlines=True)
-# lex = p.communicate(input = input_word+"\n")[0].strip()
-
-# if re.match("^\\^[^/]+/\\*", lex):
-
-# else:
-# 	print()
-# 	lex = re.sub("^\\^[^/]+/", "^", lex)
-
-# 	lex = lex.replace("<sg>", "<pl>")
-# 	p = Popen(['lt-proc', '-g', gen_file], stdin=PIPE, stdout=PIPE, universal_newlines=True)
-# 	plural = p.communicate(lex+"\n")[0].strip()
-
-# 	lex = lex.replace("<pl>", "<sg>")
-# 	p = Popen(['lt-proc', '-g', gen_file], stdin=PIPE, stdout=PIPE, universal_newlines=True)
-# 	singular = p.communicate(lex+"\n")[0].strip()
-
-# 	print('{"singular": "%s", "plural": "%s"}'%(singular, plural))
-
-
 DICTIONNARIES_PATH = "dicts" #Todo
-class Dictionnaries():
-	loaded = {}
-
-	@staticmethod
-	def getFileName(lang, type, compiled):
-		ext = ".%s.%s"%(type, "bin" if compiled else "dix")
-		return os.path.join(DICTIONNARIES_PATH, lang + ext)
-
-	@staticmethod
-	def exists(lang):
-		return os.path.isfile(Dictionnaries.getFileName(lang, "morph", True)) and os.path.isfile(Dictionnaries.getFileName(lang, "gen", True))
-
-	@staticmethod
-	def get(lang):
-		if not lang in Dictionnaries.loaded:
-			if not Dictionnaries.exists(lang):
-				pass #Todo: download+compile dictionnary
-			Dictionnaries.loaded[lang] = Dictionnary(lang)
-		return Dictionnaries.loaded[lang]
-
-
 class Dictionnary():
 	def __init__(self, lang):
 		self.lang = lang
 		self.cmds = {}
 
-		f = Dictionnaries.getFileName(lang, "morph", True)
+		f = self.getFileName("morph.bin")
 		self.cmds["analyse"] = ['lt-proc', '-z', f]
 
-		f = Dictionnaries.getFileName(lang, "gen", True)
+		f = self.getFileName("gen.bin")
 		self.cmds["gen"] = ['lt-proc', '-z', '-n', f]
 
-		f = Dictionnaries.getFileName(lang, "pgen", True)
+		f = self.getFileName("pgen.bin")
 		self.cmds["postgen"] = ['lt-proc', '-z', '-p', f]
 
+
+	def getFileName(self, ext):
+		f = os.path.join(DICTIONNARIES_PATH, self.lang + "." + ext)
+		if not os.path.exists(f):
+			raise Exception("Missing dictionnary: %s"%f)
+		return f
 
 	def lt_proc(self, type, data):
 		return shell(self.cmds[type], input=data)
@@ -153,7 +113,7 @@ class LexicalForm():
 class Pluralizer():
 	def __init__(self, lang):
 		self.tagnames = {'nbr': {'sg':'sg', 'pl':'pl'}, 'noun': 'n'} #Todo: work with other languages
-		self.dict = Dictionnaries.get(lang)
+		self.dict = Dictionnary(lang)
 
 	def pluralize(self, words):
 		tag_noun = self.tagnames["noun"]
@@ -197,11 +157,10 @@ class Pluralizer():
 
 		return pluralizedCombinations
 
-string = "Barre de céréales au lait de vache"
-d = Dictionnaries.get("fr")
-lex = d.analyse(string)
-print(lex)
+if __name__ == "__main__":
+	string = "Barre de céréales au lait de vache"
+	d = Dictionnary("fr")
+	print(d.analyse(string))
 
-p = Pluralizer('fr')
-print(p.pluralize(string))
-
+	p = Pluralizer('fr')
+	print(p.pluralize(string))
