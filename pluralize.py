@@ -1,13 +1,13 @@
 #!/usr/bin/python3
 import re, os
-from subprocess import Popen, PIPE
+from subprocess import check_output as shell
 
-# morph_file = 'fr.morph.bin'
+# analyse_file = 'fr.analyse.bin'
 # gen_file = 'fr.gen.bin'
 # input_word = cgi.FieldStorage().getvalue("word")
 
 
-# p = Popen(['lt-proc', morph_file], stdin=PIPE, stdout=PIPE, universal_newlines=True)
+# p = Popen(['lt-proc', analyse_file], stdin=PIPE, stdout=PIPE, universal_newlines=True)
 # lex = p.communicate(input = input_word+"\n")[0].strip()
 
 # if re.match("^\\^[^/]+/\\*", lex):
@@ -29,6 +29,8 @@ from subprocess import Popen, PIPE
 
 DICTIONNARIES_PATH = "dicts" #Todo
 class Dictionnaries():
+	loaded = {}
+
 	@staticmethod
 	def getFileName(lang, type, compiled):
 		ext = ".%s.%s"%(type, "bin" if compiled else "dix")
@@ -41,60 +43,165 @@ class Dictionnaries():
 	@staticmethod
 	def get(lang):
 		if not lang in Dictionnaries.loaded:
+			if not Dictionnaries.exists(lang):
+				pass #Todo: download+compile dictionnary
 			Dictionnaries.loaded[lang] = Dictionnary(lang)
 		return Dictionnaries.loaded[lang]
-
 
 
 class Dictionnary():
 	def __init__(self, lang):
 		self.lang = lang
-		self.procs = {}
+		self.cmds = {}
 
 		f = Dictionnaries.getFileName(lang, "morph", True)
-		self.procs["morph"] = Popen(['lt-proc', '-z', f], stdin=PIPE, stdout=PIPE)
+		self.cmds["analyse"] = ['lt-proc', '-z', f]
 
 		f = Dictionnaries.getFileName(lang, "gen", True)
-		self.procs["gen"] = Popen(['lt-proc', '-z', '-g', f], stdin=PIPE, stdout=PIPE)
+		self.cmds["gen"] = ['lt-proc', '-z', '-n', f]
+
+		f = Dictionnaries.getFileName(lang, "pgen", True)
+		self.cmds["postgen"] = ['lt-proc', '-z', '-p', f]
 
 
-	@staticmethod
-	def pipe_cmd(cmd, data):
-		return Popen(cmd, stdin=PIPE, stdout=PIPE).communicate(input = data)[0]
+	def lt_proc(self, type, data):
+		return shell(self.cmds[type], input=data)
 
-	@staticmethod
-	def pipe_lt_proc(proc, data):
+	def lt_proc_string(self, type, string):
+		string = bytes(string, 'UTF-8')
+		piped = self.lt_proc(type, string)
+		return str(piped, 'UTF-8')
 
-		proc.stdin.write(data)
-		proc.stdin.write(b'\0')
-		proc.stdin.flush()
-
-		output = []
-		char = proc.stdout.read(1)
-		while char and char != b'\0':
-			output.append(char)
-			char = proc.stdout.read(1)
-
-		return b"".join(output)
-
-	@staticmethod
-	def pipe_lt_proc_string(proc, string):
-		if type(string) == type(''): string = bytes(string, 'utf-8')
-		deformated = Dictionnary.pipe_cmd("apertium-destxt", string)
-		piped = Dictionnary.pipe_lt_proc(proc, deformated)
-		reformated = Dictionnary.pipe_cmd("apertium-retxt", piped)
-		return str(reformated)
-
-	def morph(self, string):
-		return Dictionnary.pipe_lt_proc_string(self.procs["morph"], string)
-	def gen(self, string):
-		return Dictionnary.pipe_lt_proc_string(self.procs["gen"], string)
+	def lt_proc_txt(self, type, string):
+		string = bytes(string, 'UTF-8')
+		deformated = shell("apertium-destxt", input=string)
+		piped = self.lt_proc(type, deformated)
+		reformated = shell("apertium-retxt", input=piped)
+		return str(reformated, 'UTF-8')
 
 
-d = Dictionnary("fr")
-# print(d.pipe(d.procs["morph"].stdin, d.procs["morph"].stdout, "Cheval maison"))
-# print(d.translate("cheval maison"))
-print(d.morph("Gâteau"))
+	def analyse(self, string):
+		lex = self.lt_proc_txt("analyse", string)
 
-# class Pluralizer(Object):
-# 	def __init__(self, lang):
+		lex = re.split("\\^([^$]+)\\$", lex)[1::2]
+		lex = lex[:-1] #Discard trailing dot added by destxt
+		return list(map(Word, lex))
+
+	def gen_raw(self, lex):
+		return self.lt_proc_string("gen", lex)[:-1] #Remove trailing \0
+
+	def gen(self, lex):
+		lex = " ".join(map(lambda x:"^%s$"%(x), lex))
+		return self.gen_raw(lex)
+
+	def postgen(self, lex):
+		return self.lt_proc_string("postgen", lex)[:-1] #Remove trailing \0
+
+
+
+class Word():
+	def __init__(self, lex = None):
+		if lex:
+			t = lex.split('/')
+			self.surfaceform = t[0]
+			self.lexicalforms = list(map(LexicalForm, t[1:]))
+		else:
+			self.surfaceform = ""
+			self.lexicalforms = []
+
+	def copy(self):
+		w = Word()
+		w.surfaceform = self.surfaceform
+		w.lexicalforms = self.lexicalforms.copy()
+		return w
+
+	def toLexicalUnit(self):
+		if len(self.lexicalforms)!=1:
+			return None
+		form = self.lexicalforms[0]
+		return "^%s$"%(form)
+
+	def __repr__(self):
+		return str({self.surfaceform: list(map(str, self.lexicalforms))})
+
+
+class LexicalForm():
+	def __init__(self, form = None):
+		if(form):
+			s = re.split("<([^>]+)>", form)
+			self.form = s[0]
+			self.tags = s[1::2]
+		else:
+			self.form = ""
+			self.tags = set()
+
+	def isUnknown(self):
+		return self.form.find("*")!=-1 or len(self.tags)==0
+
+	def copy(self):
+		f = LexicalForm()
+		f.form = self.form
+		f.tags = self.tags.copy()
+		return f
+
+	def __repr__(self):
+		form = self.form.replace("*", "")
+		return form + "".join(map(lambda x: "<%s>"%(x), self.tags))
+
+
+
+class Pluralizer():
+	def __init__(self, lang):
+		self.tagnames = {'nbr': {'sg':'sg', 'pl':'pl'}, 'noun': 'n'} #Todo: work with other languages
+		self.dict = Dictionnaries.get(lang)
+
+	def pluralize(self, words):
+		tag_noun = self.tagnames["noun"]
+		tag_sg = self.tagnames["nbr"]["sg"]
+		tag_pl = self.tagnames["nbr"]["pl"]
+		words = self.dict.analyse(words)
+
+		for word in words:
+			if len(word.lexicalforms)!=1:
+				word.lexicalforms = [x for x in word.lexicalforms if tag_noun in x.tags]
+
+		def generate(words):
+			lex = " ".join(map(Word.toLexicalUnit, words))
+			lex = self.dict.gen_raw(lex)
+			return self.dict.postgen(lex)
+
+		pluralizedCombinations = []
+		generatedwords = generate(words)
+		for i, word in enumerate(words):
+			if len(word.lexicalforms)!=1:
+				raise Exception("Ambiguous input")
+
+			form = word.lexicalforms[0]
+			if form.isUnknown():
+				continue
+			if not tag_noun in form.tags:
+				continue
+			if not (tag_sg in form.tags or tag_pl in form.tags):
+				continue
+
+			nwords = words.copy()
+			nform = form.copy()
+			nwords[i] = word.copy()
+			nwords[i].lexicalforms[0] = nform
+			if tag_sg in form.tags:
+				nform.tags[nform.tags.index(tag_sg)] = tag_pl
+				pluralizedCombinations.append({'singular': generatedwords, 'plural': generate(nwords)})
+			if tag_pl in form.tags:
+				nform.tags[nform.tags.index(tag_pl)] = tag_sg
+				pluralizedCombinations.append({'singular': generate(nwords), 'plural': generatedwords})
+
+		return pluralizedCombinations
+
+string = "Barre de céréales au lait de vache"
+d = Dictionnaries.get("fr")
+lex = d.analyse(string)
+print(lex)
+
+p = Pluralizer('fr')
+print(p.pluralize(string))
+
